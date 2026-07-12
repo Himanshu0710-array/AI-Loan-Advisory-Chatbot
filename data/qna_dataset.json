@@ -1,0 +1,50 @@
+[
+  {
+    "question": "If I want a personal loan of 8 lakhs what interest will I have to give and what will be the monthly EMI?",
+    "category": "calculation",
+    "intent": "emi_breakdown",
+    "template": "For a Personal Loan of ₹8,00,000, the applicable interest rate starting from Sample_Loan_Policy_2026.pdf is 10.75% p.a. (floating on daily reducing balance at monthly rests). Processing fee is 1.0% (₹8,000 + ₹1,440 GST = ₹9,440). Estimated EMIs: 3 Years (36 mos) = ₹26,096/mo (Total Interest: ₹1,39,469); 5 Years (60 mos) = ₹17,294/mo (Total Interest: ₹2,37,661)."
+  },
+  {
+    "question": "If my monthly salary is 60000 and my CIBIL score is 750, how much personal loan can I get?",
+    "category": "eligibility",
+    "intent": "affordability_profiler",
+    "template": "With a monthly net salary of ₹60,000, your allowable EMI capacity (FOIR of 50%) is ₹30,000/month. At the starting personal loan rate of 10.75% p.a. over 5 years (60 months), your maximum eligible loan amount is approximately ₹13,88,000 (13.88 Lakhs). A CIBIL score of 750+ qualifies you for the lowest interest rate and fast-track sanction without requiring a guarantor."
+  },
+  {
+    "question": "What if my CIBIL score is 680 or below 650?",
+    "category": "eligibility",
+    "intent": "cibil_rules",
+    "template": "A CIBIL score between 650 and 749 may require a third-party guarantor (as mandated in Personal_Loan_PNB_1114_(R1).pdf clause 5) or carry a higher interest risk spread (up to 13–15% p.a.). If your CIBIL score falls below 650, unsecured personal loan applications are generally rejected unless supported by collateral or secured against time deposits (Personal_Loans_-_MITC.pdf)."
+  },
+  {
+    "question": "Compare Kotak Mahindra Bank and PNB personal loan terms and conditions.",
+    "category": "comparison",
+    "intent": "policy_comparison",
+    "template": "Comparison Summary: 1. Kotak Mahindra Bank (kotak.pdf): Floating interest rate based on bank benchmark; allows credit info sharing under clause 10.5; prepayment charges depend on lock-in period. 2. PNB Personal Loan Scheme (Personal_Loan_PNB_1114_(R1).pdf): Requires a mandatory third-party guarantor verification (page 5); photocopies of loan documents provided within 7 working days (page 11)."
+  },
+  {
+    "question": "What happens if I miss an EMI payment or my EMI cheque bounces?",
+    "category": "default_risk",
+    "intent": "overdue_penalty",
+    "template": "As per policy terms, missing an EMI or cheque bounce incurs: 1. Overdue/Penal Interest charged on the delayed daily reducing balance at monthly rests. 2. Cheque/NACH return charges (typically ₹450–₹600 + GST per instance). 3. CIBIL reporting under clause 10.5 (`kotak.pdf`), which severely drops your credit score and triggers recovery action by the bank."
+  },
+  {
+    "question": "Can I prepay or foreclose my personal loan early without paying charges?",
+    "category": "prepayment",
+    "intent": "foreclosure_rules",
+    "template": "For individual borrowers with floating-rate personal or home loans, RBI guidelines mandate NIL foreclosure/prepayment charges. However, fixed-rate loans or commercial credit lines may attract prepayment charges (typically 2% to 4% of the prepaid principal) if foreclosed before the specified lock-in period."
+  },
+  {
+    "question": "What is the formula to calculate Equated Monthly Installments (EMI)?",
+    "category": "calculation",
+    "intent": "emi_formula",
+    "template": "The standard EMI formula is: EMI = [P x R x (1+R)^N] / [(1+R)^N - 1], where P = Principal Loan Amount, R = Monthly Interest Rate (Annual Rate / 12 / 100), and N = Loan Tenure in Months. Interest is calculated on a daily reducing balance at monthly rests."
+  },
+  {
+    "question": "What documents are required for salaried vs self-employed loan applicants?",
+    "category": "documentation",
+    "intent": "kyc_checklist",
+    "template": "Required Documents Checklist: 1. Identity & Age Proof: PAN Card (mandatory), Aadhaar Card, or Passport. 2. Address Proof: Utility bills or registered rent agreement. 3. Salaried Income Proof: Last 3 months' salary slips, 6 months' bank statements, and Form 16. 4. Self-Employed Income Proof: Last 2–3 years' ITR, Computation of Income, Profit & Loss account, and Balance Sheet."
+  }
+]
