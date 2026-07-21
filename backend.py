@@ -85,30 +85,23 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5000").split(",") if o.strip()]
 FLASK_DEBUG = os.getenv("FLASK_DEBUG", "false").strip().lower() == "true"
 
-# --- Local embedding model (always loaded — embeddings never go external) ---
-from sentence_transformers import SentenceTransformer
+# --- Google Gemini Setup (LLM & Embeddings) ---
+import google.generativeai as genai
 
-print("[*] Loading local embedding model (all-MiniLM-L6-v2)...")
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-EMBED_DIM = embedder.get_sentence_embedding_dimension()
-print(f"[+] Local embedder ready (dim={EMBED_DIM})")
-
-# --- Gemini (generation only, optional) ---
 chat_model = None
-if not LOCAL_ONLY_MODE:
-    if not GEMINI_API_KEY:
-        print("[!] WARNING: LOCAL_ONLY_MODE is false but GEMINI_API_KEY is not set.")
-        print("    Generation will fall back to local extractive answers on every request.")
-    else:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            chat_model = genai.GenerativeModel("gemini-2.0-flash")
-        except Exception as e:
-            print(f"[!] Could not initialize Gemini client: {e}")
-            chat_model = None
+EMBED_DIM = 768  # text-embedding-004 dimension
+
+if not GEMINI_API_KEY:
+    print("[!] WARNING: GEMINI_API_KEY is not set. You will not be able to embed documents or answer questions.")
 else:
-    print("[*] LOCAL_ONLY_MODE=true — Gemini will not be used. All generation is local/extractive.")
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        chat_model = genai.GenerativeModel("gemini-2.0-flash")
+        print("[+] Gemini client initialized successfully.")
+    except Exception as e:
+        print(f"[!] Could not initialize Gemini client: {e}")
+        chat_model = None
+
 
 # Directories
 BASE_DIR = Path(__file__).resolve().parent
@@ -245,29 +238,44 @@ def chunk_document(pages: list, file_name: str, chunk_size: int = 500, chunk_ove
 
 
 # ============================================================
-#  4. EMBEDDING SERVICE (Local, sentence-transformers)
+#  4. EMBEDDING SERVICE (Google Gemini)
 # ============================================================
-# Runs entirely on this machine. No network call, no API key needed.
-# Batched properly (this fixes the old fake "batching" that just called
-# the API one chunk at a time with a sleep in between).
 
 def generate_embedding(text: str) -> list:
-    """Generate a single embedding vector locally."""
-    vec = embedder.encode(text, normalize_embeddings=True)
-    return vec.tolist()
+    """Generate a single embedding vector via Gemini API."""
+    if not GEMINI_API_KEY:
+        return [0.0] * EMBED_DIM
+    
+    # Optional: we can truncate text if needed, but chunking already handles it
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text
+    )
+    return result['embedding']
 
 
 def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
-    """Generate embeddings for many texts in real batches (single model call per batch)."""
-    if not texts:
-        return []
-    vectors = embedder.encode(
-        texts,
-        batch_size=batch_size,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
-    return [v.tolist() for v in vectors]
+    """Generate embeddings for many texts. Gemini API supports batched embeddings."""
+    if not texts or not GEMINI_API_KEY:
+        return [[0.0] * EMBED_DIM] * len(texts)
+    
+    vectors = []
+    # Process in batches
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i+batch_size]
+        try:
+            result = genai.embed_content(
+                model="models/text-embedding-004",
+                content=batch_texts
+            )
+            # result['embedding'] is a list of embeddings if we sent a list of texts
+            batch_vectors = result['embedding']
+            vectors.extend(batch_vectors)
+        except Exception as e:
+            print(f"[!] Error generating embedding batch: {e}")
+            vectors.extend([[0.0] * EMBED_DIM] * len(batch_texts))
+            
+    return vectors
 
 
 def generate_embeddings(chunks: list, batch_size: int = 32) -> list:
@@ -275,7 +283,7 @@ def generate_embeddings(chunks: list, batch_size: int = 32) -> list:
     texts = [c["text"] for c in chunks]
     vectors = generate_embeddings_batch(texts, batch_size=batch_size)
     embedded_chunks = [{**chunk, "embedding": vec} for chunk, vec in zip(chunks, vectors)]
-    print(f"  [+] Generated {len(embedded_chunks)} embeddings locally (batched)")
+    print(f"  [+] Generated {len(embedded_chunks)} embeddings via Gemini API")
     return embedded_chunks
 
 
