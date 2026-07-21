@@ -2,7 +2,7 @@
  * API Service — Handles all fetch calls to the Python Flask backend
  */
 const API = {
-  BASE_URL: window.location.origin,
+  BASE_URL: "https://ai-loan-advisory-chatbot-sipo.onrender.com",
 
   getToken() {
     return localStorage.getItem('access_token');
