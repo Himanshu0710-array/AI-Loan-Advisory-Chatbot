@@ -58,6 +58,7 @@ import sys
 import math
 from pathlib import Path
 from functools import wraps
+from datetime import datetime
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -66,9 +67,14 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import numpy as np
 from PyPDF2 import PdfReader
+import docx
+import openpyxl
+from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 
 load_dotenv()
 
@@ -115,28 +121,67 @@ DATA_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
-#  2. PDF PARSING SERVICE
+#  2. DOCUMENT PARSING SERVICE
 # ============================================================
 
-def parse_pdf(file_path: str) -> dict:
-    """Parse a PDF and extract text with page numbers."""
-    reader = PdfReader(file_path)
-    file_name = Path(file_path).name
+def parse_document(file_path: str) -> dict:
+    """Parse a document (PDF, DOCX, XLSX, HTML) and extract text with logical grouping."""
+    file_path = Path(file_path)
+    file_name = file_path.name
+    ext = file_path.suffix.lower()
 
     pages = []
     full_text = ""
 
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        pages.append({"pageNumber": i + 1, "text": text.strip()})
-        full_text += text + "\n"
+    if ext == ".pdf":
+        reader = PdfReader(str(file_path))
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            pages.append({"pageNumber": i + 1, "text": text.strip()})
+            full_text += text + "\n"
+        total_pages = len(reader.pages)
+        
+    elif ext == ".docx":
+        doc = docx.Document(str(file_path))
+        # Treat paragraphs as pages/blocks for chunking
+        for i, para in enumerate(doc.paragraphs):
+            if para.text.strip():
+                pages.append({"pageNumber": i + 1, "text": para.text.strip()})
+                full_text += para.text + "\n"
+        total_pages = len(doc.paragraphs)
+        
+    elif ext == ".xlsx":
+        wb = openpyxl.load_workbook(str(file_path), data_only=True)
+        sheet_idx = 1
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            sheet_text = f"--- Sheet: {sheet_name} ---\n"
+            for row in sheet.iter_rows(values_only=True):
+                row_vals = [str(v) for v in row if v is not None]
+                if row_vals:
+                    sheet_text += " | ".join(row_vals) + "\n"
+            if sheet_text.strip():
+                pages.append({"pageNumber": sheet_idx, "text": sheet_text.strip()})
+                full_text += sheet_text + "\n"
+                sheet_idx += 1
+        total_pages = len(wb.sheetnames)
+        
+    elif ext == ".html":
+        with open(file_path, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f, "html.parser")
+        text = soup.get_text(separator="\n", strip=True)
+        pages.append({"pageNumber": 1, "text": text})
+        full_text = text
+        total_pages = 1
+    else:
+        raise ValueError(f"Unsupported document format: {ext}")
 
     return {
         "fileName": file_name,
         "pages": pages,
         "text": full_text,
         "metadata": {
-            "totalPages": len(reader.pages),
+            "totalPages": total_pages,
             "fileSize": os.path.getsize(file_path),
         },
     }
@@ -235,49 +280,30 @@ def generate_embeddings(chunks: list, batch_size: int = 32) -> list:
 
 
 # ============================================================
-#  5. VECTOR STORE (In-Memory + JSON Persistence)
+#  5. VECTOR STORE (ChromaDB)
 # ============================================================
 
-STORE_FILE = DATA_DIR / "vector_store.json"
-vector_store = {"documents": [], "document_files": []}
+import chromadb
 
+CHROMA_DIR = DATA_DIR / "chroma"
+chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+collection = chroma_client.get_or_create_collection(name="loan_documents", metadata={"hnsw:space": "cosine"})
 
 def init_vector_store():
-    """Load vector store from disk if exists, and auto-load any PDFs and training Q&A datasets found."""
-    global vector_store
-    if STORE_FILE.exists():
-        try:
-            with open(STORE_FILE, "r") as f:
-                vector_store = json.load(f)
-            print(f"[*] Loaded vector store: {len(vector_store['documents'])} chunks "
-                  f"from {len(vector_store['document_files'])} documents")
-            if vector_store.get("documents") and len(vector_store["documents"][0].get("embedding", [])) != EMBED_DIM:
-                old_dim = len(vector_store["documents"][0].get("embedding", []))
-                print(f"[!] Embedding dimension mismatch detected (store has {old_dim}, current model requires {EMBED_DIM}).")
-                print(f"[*] Re-embedding all {len(vector_store['documents'])} stored chunks with local model ({EMBED_DIM}-dim)...")
-                raw_chunks = [{"id": d["id"], "text": d["text"], "metadata": d["metadata"]} for d in vector_store["documents"]]
-                vector_store["documents"] = generate_embeddings(raw_chunks)
-                save_store()
-                print(f"[+] Re-embedding complete and saved ({len(vector_store['documents'])} chunks updated).")
-        except Exception as e:
-            print(f"[!] Error loading vector store: {e}")
-            vector_store = {"documents": [], "document_files": []}
-    else:
-        print("[*] Initialized empty vector store")
+    """Auto-load any PDFs found if ChromaDB is empty."""
+    stats = get_store_stats()
+    print(f"[*] Loaded ChromaDB vector store: {stats['totalChunks']} chunks")
 
-    # 1. Auto-load PDFs
-    if len(vector_store["documents"]) == 0 and DOCUMENTS_DIR.exists():
+    # 1. Auto-load Documents
+    if stats["totalChunks"] == 0 and DOCUMENTS_DIR.exists():
         for f in DOCUMENTS_DIR.iterdir():
-            if f.suffix.lower() == ".pdf":
+            if f.suffix.lower() in [".pdf", ".docx", ".xlsx", ".html"]:
                 try:
-                    print(f"[*] Auto-loading existing PDF into vector store: {f.name}")
-                    parsed = parse_pdf(str(f))
+                    print(f"[*] Auto-loading existing document into ChromaDB: {f.name}")
+                    parsed = parse_document(str(f))
                     chunks = chunk_document(parsed["pages"], f.name)
                     embedded = generate_embeddings(chunks)
-                    vector_store["documents"].extend(embedded)
-                    if f.name not in vector_store["document_files"]:
-                        vector_store["document_files"].append(f.name)
-                    save_store()
+                    add_documents(embedded, f.name)
                     print(f"[+] Successfully auto-loaded {len(embedded)} chunks from {f.name}")
                 except Exception as e:
                     print(f"[!] Auto-load error on {f.name}: {e}")
@@ -286,23 +312,32 @@ def init_vector_store():
 
 
 def save_store():
-    with open(STORE_FILE, "w") as f:
-        json.dump(vector_store, f)
-
+    # ChromaDB persists automatically
+    pass
 
 def add_documents(chunks: list, file_name: str):
-    """Add embedded chunks to the store (replaces existing from same file)."""
-    global vector_store
-    vector_store["documents"] = [d for d in vector_store["documents"] if d["metadata"]["fileName"] != file_name]
-    vector_store["document_files"] = [n for n in vector_store["document_files"] if n != file_name]
-    vector_store["documents"].extend(chunks)
-    vector_store["document_files"].append(file_name)
-    save_store()
-    print(f"[+] Added {len(chunks)} chunks from '{file_name}' to vector store")
-
+    """Add embedded chunks to the ChromaDB store (replaces existing from same file)."""
+    # Delete existing chunks for this file
+    collection.delete(where={"fileName": file_name})
+    
+    if not chunks:
+        return
+        
+    ids = [c["id"] for c in chunks]
+    embeddings = [c["embedding"] for c in chunks]
+    texts = [c["text"] for c in chunks]
+    metadatas = [c["metadata"] for c in chunks]
+    
+    collection.add(
+        ids=ids,
+        embeddings=embeddings,
+        documents=texts,
+        metadatas=metadatas
+    )
+    print(f"[+] Added {len(chunks)} chunks from '{file_name}' to ChromaDB")
 
 def cosine_similarity(vec_a, vec_b) -> float:
-    """Calculate cosine similarity between two vectors. (single definition — no duplicate)"""
+    """Calculate cosine similarity between two vectors."""
     a, b = np.array(vec_a), np.array(vec_b)
     if a.shape != b.shape:
         return 0.0
@@ -326,50 +361,77 @@ STOP_WORDS = {
 
 
 def search_similar(query_embedding: list, query_text: str = "", top_k: int = 5) -> list:
-    """Find the top-K most similar chunks using semantic + light keyword scoring."""
-    if not vector_store["documents"]:
+    """Find the top-K most similar chunks using ChromaDB semantic + light keyword scoring."""
+    stats = get_store_stats()
+    if stats["totalChunks"] == 0:
+        return []
+
+    # Fetch top 20 candidates from ChromaDB
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=min(20, stats["totalChunks"])
+    )
+
+    if not results["documents"] or not results["documents"][0]:
         return []
 
     q_words = set(re.findall(r"\b[a-z0-9]{3,}\b", query_text.lower())) - STOP_WORDS
-
     scored = []
-    for doc in vector_store["documents"]:
-        cos_sim = cosine_similarity(query_embedding, doc["embedding"])
 
+    for idx, text in enumerate(results["documents"][0]):
+        # ChromaDB cosine distance: 1 - cosine_similarity
+        distance = results["distances"][0][idx]
+        cos_sim = 1.0 - distance
+        
+        metadata = results["metadatas"][0][idx]
+        
         kw_boost = 0.0
         if q_words:
-            c_words = set(re.findall(r"\b[a-z0-9]{3,}\b", doc["text"].lower()))
+            c_words = set(re.findall(r"\b[a-z0-9]{3,}\b", text.lower()))
             overlap = sum(1 for w in q_words if w in c_words)
-            # Keyword boost only reinforces an already-plausible semantic match;
-            # it never substitutes for semantic similarity on its own.
             if cos_sim >= 0.15:
                 kw_boost = (overlap / len(q_words)) * 0.3
 
         final_score = min(1.0, cos_sim + kw_boost)
 
-        text_upper = doc["text"].upper()
-        if "___" in doc["text"] or "FOR OFFICE USE" in text_upper or "CUSTOMER SIGNATURE" in text_upper or text_upper[:15].startswith("PAGE "):
+        text_upper = text.upper()
+        if "___" in text or "FOR OFFICE USE" in text_upper or "CUSTOMER SIGNATURE" in text_upper or text_upper[:15].startswith("PAGE "):
             final_score *= 0.15
 
-        scored.append({"text": doc["text"], "metadata": doc["metadata"], "score": final_score})
+        scored.append({"text": text, "metadata": metadata, "score": final_score})
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return [s for s in scored if s["score"] >= 0.12][:top_k]
 
-
 def get_store_stats():
+    count = collection.count()
+    
+    if count == 0:
+        return {
+            "totalChunks": 0,
+            "documents": [],
+            "documentCount": 0,
+        }
+    
+    # We retrieve a few items to guess the files, or we can just fetch all metadatas
+    try:
+        results = collection.get(include=["metadatas"])
+        doc_files = list(set(m["fileName"] for m in results["metadatas"] if m and "fileName" in m))
+    except Exception:
+        doc_files = []
+
     return {
-        "totalChunks": len(vector_store["documents"]),
-        "documents": vector_store["document_files"],
-        "documentCount": len(vector_store["document_files"]),
+        "totalChunks": count,
+        "documents": doc_files,
+        "documentCount": len(doc_files),
     }
 
-
 def clear_store():
-    global vector_store
-    vector_store = {"documents": [], "document_files": []}
-    save_store()
-    print("[*] Vector store cleared")
+    # To clear, we can delete the collection and recreate it
+    chroma_client.delete_collection("loan_documents")
+    global collection
+    collection = chroma_client.create_collection(name="loan_documents", metadata={"hnsw:space": "cosine"})
+    print("[*] ChromaDB Vector store cleared")
 
 
 # ============================================================
@@ -493,7 +555,8 @@ IMPORTANT RULES:
 5. Be concise, highly structured, and human-readable. Ignore OCR form blanks ("___", "Signature FOR OFFICE USE ONLY").
 6. For EMI calculations, clearly show the formula and step-by-step math.
 7. Format answers using bold headings, bullet points, and clean spacing. Never output raw unstructured text blocks.
-8. Use the conversation history only to resolve references like "that", "it", or follow-ups such as "what about for X" — do not restate old answers unnecessarily."""
+8. Use the conversation history only to resolve references like "that", "it", or follow-ups such as "what about for X" — do not restate old answers unnecessarily.
+9. MULTILINGUAL SUPPORT: Automatically detect the language of the user's question. You must generate your response in the EXACT SAME language as the user's question, even if the source documents are in a different language."""
 
 
 def format_history(history: list, max_turns: int = 3) -> str:
@@ -752,6 +815,28 @@ Provide a clear, accurate answer based ONLY on the above context (and the conver
 app = Flask(__name__, static_folder=str(CLIENT_DIR), static_url_path="")
 CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + str(DATA_DIR / 'app.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "dev-super-secret-key")
+
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+
+class ChatMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    answer = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+with app.app_context():
+    db.create_all()
+
 # Optional rate limiting — enabled automatically if flask-limiter is installed
 try:
     from flask_limiter import Limiter
@@ -817,8 +902,60 @@ def serve_static(path):
     return send_from_directory(str(CLIENT_DIR), path)
 
 
+# --- Auth APIs ---
+@app.route("/api/register", methods=["POST"])
+def register():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username")
+    password = data.get("password")
+    if not username or not password:
+        return jsonify({"error": "Username and password required"}), 400
+    
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "User already exists"}), 400
+        
+    new_user = User(username=username, password=password) # In production, hash this!
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({"success": True, "message": "Registered successfully"})
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username")
+    password = data.get("password")
+    
+    user = User.query.filter_by(username=username, password=password).first()
+    if not user:
+        return jsonify({"error": "Invalid credentials"}), 401
+        
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({"success": True, "access_token": access_token})
+
+# --- Chat History API ---
+@app.route("/api/chat/history", methods=["GET"])
+@jwt_required()
+def get_chat_history():
+    try:
+        user_id = get_jwt_identity()
+        sessions = ChatMessage.query.filter_by(user_id=int(user_id)).order_by(ChatMessage.timestamp.asc()).all()
+        history = [
+            {
+                "id": s.id,
+                "question": s.question,
+                "answer": s.answer,
+                "timestamp": s.timestamp.isoformat()
+            }
+            for s in sessions
+        ]
+        return jsonify({"success": True, "history": history})
+    except Exception as e:
+        print(f"[!] History error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # --- Chat API (non-streaming) ---
 @app.route("/api/chat", methods=["POST"])
+@jwt_required(optional=True)
 def chat():
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -831,6 +968,22 @@ def chat():
 
         print(f'\n[?] Question: "{question}"')
         result = process_query(question, history=history)
+        
+        # Save history if logged in
+        user_id = get_jwt_identity()
+        if user_id:
+            try:
+                new_session = ChatMessage(
+                    user_id=int(user_id),
+                    question=question,
+                    answer=result.get("answer", "")
+                )
+                db.session.add(new_session)
+                db.session.commit()
+            except Exception as db_err:
+                print(f"  [!] Failed to save chat history: {db_err}")
+                db.session.rollback()
+
         return jsonify({"success": True, **result})
     except Exception as e:
         print(f"[!] Chat error: {e}")
@@ -847,6 +1000,7 @@ def stream_words_only(text: str, delay: float = 0.016):
 
 # --- Chat API (Streaming via SSE) ---
 @app.route("/api/chat/stream", methods=["POST"])
+@jwt_required(optional=True)
 def chat_stream():
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -864,6 +1018,24 @@ def chat_stream():
             def casual_gen():
                 for token_sse in stream_words_only(casual_response["answer"], delay=0.015):
                     yield token_sse
+                
+                # Save casual response to history
+                user_id = get_jwt_identity()
+                if user_id:
+                    try:
+                        from flask import current_app
+                        with current_app.app_context():
+                            new_session = ChatMessage(
+                                user_id=int(user_id),
+                                question=question,
+                                answer=casual_response["answer"]
+                            )
+                            db.session.add(new_session)
+                            db.session.commit()
+                    except Exception as db_err:
+                        print(f"  [!] Failed to save chat history: {db_err}")
+                        db.session.rollback()
+
                 yield f"data: {json.dumps({'type': 'done', 'sources': casual_response['sources'], 'validation': casual_response['validation']})}\n\n"
             return Response(stream_with_context(casual_gen()), mimetype="text/event-stream")
 
@@ -949,6 +1121,24 @@ Provide a clear, accurate answer based ONLY on the above context (and the conver
                     yield token_sse
 
             validation = validate_response(full_answer, relevant_chunks)
+            
+            # Save history if logged in
+            user_id = get_jwt_identity()
+            if user_id:
+                try:
+                    from flask import current_app
+                    with current_app.app_context():
+                        new_session = ChatMessage(
+                            user_id=int(user_id),
+                            question=question,
+                            answer=full_answer
+                        )
+                        db.session.add(new_session)
+                        db.session.commit()
+                except Exception as db_err:
+                    print(f"  [!] Failed to save chat history: {db_err}")
+                    db.session.rollback()
+
             yield f"data: {json.dumps({'type': 'done', 'sources': sources, 'validation': validation})}\n\n"
 
         return Response(stream_with_context(generate_stream()), mimetype="text/event-stream")
@@ -967,8 +1157,9 @@ def upload_document():
             return jsonify({"error": "No file uploaded."}), 400
 
         file = request.files["document"]
-        if not file.filename.lower().endswith(".pdf"):
-            return jsonify({"error": "Only PDF files are allowed."}), 400
+        ext = Path(file.filename).suffix.lower()
+        if ext not in [".pdf", ".docx", ".xlsx", ".html"]:
+            return jsonify({"error": "Only PDF, DOCX, XLSX, and HTML files are allowed."}), 400
 
         file.seek(0, 2)
         size = file.tell()
@@ -982,9 +1173,9 @@ def upload_document():
 
         print(f'\n[*] Processing: "{file.filename}"')
 
-        print("  [*] Parsing PDF...")
-        parsed = parse_pdf(str(file_path))
-        print(f"  [+] Extracted {len(parsed['pages'])} pages")
+        print("  [*] Parsing document...")
+        parsed = parse_document(str(file_path))
+        print(f"  [+] Extracted {len(parsed['pages'])} logical pages/blocks")
 
         print("  [*] Chunking text...")
         chunks = chunk_document(parsed["pages"], safe_name)
@@ -1020,7 +1211,7 @@ def list_documents():
     documents = []
     if DOCUMENTS_DIR.exists():
         for f in DOCUMENTS_DIR.iterdir():
-            if f.suffix.lower() == ".pdf":
+            if f.suffix.lower() in [".pdf", ".docx", ".xlsx", ".html"]:
                 documents.append({"name": f.name, "size": f.stat().st_size})
     return jsonify({"success": True, "documents": documents, "stats": get_store_stats()})
 

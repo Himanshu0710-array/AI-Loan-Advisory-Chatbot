@@ -41,6 +41,7 @@ const App = {
     this.setupEventListeners();
     this.initTheme();
     this.initEMICalculator();
+    this.initAuth();
     console.log("🏦 AI Loan Advisory Chatbot (Enhanced) initialized");
   },
 
@@ -248,6 +249,111 @@ const App = {
       Toast.show("Chat exported successfully! ✅", "success");
     } catch (error) {
       Toast.show(`Export failed: ${error.message}`, "error");
+    }
+  },
+
+  // ==================== Authentication ====================
+  initAuth() {
+    this.authMode = 'login'; // 'login' or 'register'
+    const modal = document.getElementById("authModal");
+    const openBtn = document.getElementById("openAuthModalBtn");
+    const closeBtn = document.getElementById("authModalClose");
+    const submitBtn = document.getElementById("authSubmitBtn");
+    const toggleLink = document.getElementById("authToggleLink");
+    const authError = document.getElementById("authError");
+    const title = document.getElementById("authModalTitle");
+    const toggleText = document.getElementById("authToggleText");
+    const usernameInput = document.getElementById("authUsername");
+    const passwordInput = document.getElementById("authPassword");
+
+    // Update UI based on token
+    this.updateAuthUI();
+
+    openBtn.addEventListener("click", () => {
+      if (API.getToken()) {
+        // Logout
+        API.logout();
+        this.updateAuthUI();
+        Toast.show("Logged out successfully");
+      } else {
+        // Open modal
+        modal.classList.add("visible");
+        authError.classList.add("hidden");
+        usernameInput.value = "";
+        passwordInput.value = "";
+      }
+    });
+
+    closeBtn.addEventListener("click", () => modal.classList.remove("visible"));
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.classList.remove("visible");
+    });
+
+    const handleToggle = (e) => {
+      if (e) e.preventDefault();
+      authError.classList.add("hidden");
+      if (this.authMode === 'login') {
+        this.authMode = 'register';
+        title.innerHTML = "📝 Sign Up";
+        submitBtn.textContent = "Register";
+        toggleText.innerHTML = 'Already have an account? <a href="#" id="authToggleLink">Login</a>';
+      } else {
+        this.authMode = 'login';
+        title.innerHTML = "🔑 Login";
+        submitBtn.textContent = "Login";
+        toggleText.innerHTML = 'Don\'t have an account? <a href="#" id="authToggleLink">Sign up</a>';
+      }
+      document.getElementById("authToggleLink").addEventListener("click", handleToggle);
+    };
+
+    toggleLink.addEventListener("click", handleToggle);
+
+    submitBtn.addEventListener("click", async () => {
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+      if (!username || !password) {
+        authError.textContent = "Please fill in all fields.";
+        authError.classList.remove("hidden");
+        return;
+      }
+
+      try {
+        submitBtn.disabled = true;
+        if (this.authMode === 'login') {
+          await API.login(username, password);
+          Toast.show("Logged in successfully!", "success");
+          modal.classList.remove("visible");
+          this.updateAuthUI();
+        } else {
+          await API.register(username, password);
+          Toast.show("Registered successfully! Please login.", "success");
+          // Switch back to login
+          document.getElementById("authToggleLink").click();
+        }
+      } catch (error) {
+        authError.textContent = error.message;
+        authError.classList.remove("hidden");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  },
+
+  updateAuthUI() {
+    const btn = document.getElementById("openAuthModalBtn");
+    if (API.getToken()) {
+      btn.textContent = "Logout";
+      btn.classList.add("logout-btn");
+      // Load history when logged in
+      Chat.loadHistory();
+    } else {
+      btn.textContent = "Login";
+      btn.classList.remove("logout-btn");
+      // Clear chat
+      const messages = document.getElementById("messages").querySelectorAll('.message');
+      messages.forEach(m => m.remove());
+      Chat.chatHistory = [];
+      document.getElementById("welcomeScreen").style.display = "flex";
     }
   },
 

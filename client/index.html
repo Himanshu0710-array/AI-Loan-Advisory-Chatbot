@@ -26,6 +26,9 @@
             <span>Loan Advisory Agent</span>
           </div>
         </div>
+        <div class="auth-actions" id="authActions">
+          <button class="auth-btn login-btn" id="openAuthModalBtn">Login</button>
+        </div>
       </div>
       <div class="sidebar-section">
         <h3 class="section-title">
@@ -164,6 +167,33 @@
         </form>
       </div>
     </main>
+  </div>
+
+  <!-- Auth Modal -->
+  <div class="modal-overlay" id="authModal">
+    <div class="modal auth-modal-content">
+      <div class="modal-header">
+        <h3 id="authModalTitle">🔑 Login</h3>
+        <button class="modal-close" id="authModalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="auth-form" id="authForm">
+          <div class="form-group">
+            <label for="authUsername">Username</label>
+            <input type="text" id="authUsername" placeholder="Enter username" autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="authPassword">Password</label>
+            <input type="password" id="authPassword" placeholder="Enter password" autocomplete="current-password" />
+          </div>
+          <div class="auth-error hidden" id="authError">Invalid credentials</div>
+          <button class="auth-submit-btn" id="authSubmitBtn">Login</button>
+          <div class="auth-toggle">
+            <span id="authToggleText">Don't have an account? <a href="#" id="authToggleLink">Sign up</a></span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- EMI Calculator Modal -->

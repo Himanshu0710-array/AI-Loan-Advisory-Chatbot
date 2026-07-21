@@ -13,6 +13,53 @@ const Chat = {
   },
 
   /**
+   * Load history from server
+   */
+  async loadHistory() {
+    try {
+      if (!API.getToken()) return;
+      const data = await API.getChatHistory();
+      if (data.history && data.history.length > 0) {
+        this.hideWelcome();
+        // Clear current messages
+        const messages = this.messagesEl.querySelectorAll('.message');
+        messages.forEach(m => m.remove());
+        this.chatHistory = []; // Reset local memory
+
+        for (const msg of data.history) {
+          // Render user msg
+          this.chatHistory.push({ role: "user", content: msg.question, timestamp: this.formatDbTime(msg.timestamp) });
+          const uEl = document.createElement("div");
+          uEl.className = "message user";
+          uEl.innerHTML = `
+            <div class="message-avatar">You</div>
+            <div class="message-content">
+              <div class="message-bubble">${this.escapeHtml(msg.question)}</div>
+              <div class="message-time">${this.formatDbTime(msg.timestamp)}</div>
+            </div>
+          `;
+          this.messagesEl.appendChild(uEl);
+
+          // Render bot msg
+          if (msg.answer) {
+            this.chatHistory.push({ role: "bot", content: msg.answer, timestamp: this.formatDbTime(msg.timestamp) });
+            const bEl = this._createBotMessageEl(msg.answer, [], null); // History doesn't save sources for now
+            this.messagesEl.appendChild(bEl);
+          }
+        }
+        this.scrollToBottom();
+      }
+    } catch (e) {
+      console.log("Failed to load history:", e);
+    }
+  },
+
+  formatDbTime(isoStr) {
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  },
+
+  /**
    * Add a user message to the chat.
    */
   addUserMessage(text) {

@@ -4,16 +4,29 @@
 const API = {
   BASE_URL: window.location.origin,
 
+  getToken() {
+    return localStorage.getItem('access_token');
+  },
+
+  getAuthHeaders() {
+    const token = this.getToken();
+    return token ? { "Authorization": `Bearer ${token}` } : {};
+  },
+
   /**
    * Send a chat question (non-streaming).
    */
   async sendMessage(question) {
     const response = await fetch(`${this.BASE_URL}/api/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        ...this.getAuthHeaders()
+      },
       body: JSON.stringify({ question }),
     });
     if (!response.ok) {
+      if (response.status === 401) throw new Error("Unauthorized");
       const error = await response.json().catch(() => ({}));
       throw new Error(error.error || "Failed to get response");
     }
@@ -27,11 +40,15 @@ const API = {
     try {
       const response = await fetch(`${this.BASE_URL}/api/chat/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          ...this.getAuthHeaders()
+        },
         body: JSON.stringify({ question }),
       });
 
       if (!response.ok) {
+        if (response.status === 401) throw new Error("Unauthorized");
         const error = await response.json().catch(() => ({}));
         throw new Error(error.error || "Stream failed");
       }
@@ -149,4 +166,66 @@ const API = {
     if (!response.ok) throw new Error("Export failed");
     return response.blob();
   },
+
+  /**
+   * Register a new user
+   */
+  async register(username, password) {
+    const response = await fetch(`${this.BASE_URL}/api/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || "Registration failed");
+    }
+    return response.json();
+  },
+
+  /**
+   * Login user and get JWT token
+   */
+  async login(username, password) {
+    const response = await fetch(`${this.BASE_URL}/api/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || "Login failed");
+    }
+    const data = await response.json();
+    if (data.access_token) {
+      localStorage.setItem('access_token', data.access_token);
+    }
+    return data;
+  },
+
+  /**
+   * Logout user
+   */
+  logout() {
+    localStorage.removeItem('access_token');
+  },
+
+  /**
+   * Fetch user chat history
+   */
+  async getChatHistory() {
+    const response = await fetch(`${this.BASE_URL}/api/chat/history`, {
+      method: "GET",
+      headers: { 
+        "Content-Type": "application/json",
+        ...this.getAuthHeaders()
+      }
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error("Unauthorized");
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || "Failed to fetch history");
+    }
+    return response.json();
+  }
 };
