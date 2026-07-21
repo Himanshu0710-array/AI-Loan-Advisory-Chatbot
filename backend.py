@@ -418,13 +418,15 @@ def search_similar(query_embedding: list, query_text: str = "", top_k: int = 5) 
         final_score = min(1.0, cos_sim + kw_boost)
 
         text_upper = text.upper()
+        text_upper = text.upper()
         if "___" in text or "FOR OFFICE USE" in text_upper or "CUSTOMER SIGNATURE" in text_upper or text_upper[:15].startswith("PAGE "):
             final_score *= 0.15
 
         scored.append({"text": text, "metadata": metadata, "score": final_score})
 
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return [s for s in scored if s["score"] >= 0.12][:top_k]
+    # Lowered threshold for Gemini embeddings
+    return [s for s in scored if s["score"] >= 0.05][:top_k]
 
 def get_store_stats():
     count = collection.count()
@@ -477,7 +479,8 @@ DOMAIN_DESCRIPTION = (
 DOMAIN_ANCHOR_EMBEDDING = generate_embedding(DOMAIN_DESCRIPTION)
 
 # Similarity below this to the domain anchor is treated as likely off-topic.
-DOMAIN_SIMILARITY_THRESHOLD = 0.30
+# Lowered for Gemini embeddings (they have a wider angular spread)
+DOMAIN_SIMILARITY_THRESHOLD = 0.10
 
 
 def is_out_of_domain(question: str, query_embedding: list, top_retrieval_score: float) -> bool:
@@ -490,7 +493,7 @@ def is_out_of_domain(question: str, query_embedding: list, top_retrieval_score: 
     phrasing but still hit relevant document content.
     """
     anchor_sim = cosine_similarity(query_embedding, DOMAIN_ANCHOR_EMBEDDING)
-    return anchor_sim < DOMAIN_SIMILARITY_THRESHOLD and top_retrieval_score < 0.20
+    return anchor_sim < DOMAIN_SIMILARITY_THRESHOLD and top_retrieval_score < 0.10
 
 
 def build_out_of_domain_response(question: str) -> dict:
