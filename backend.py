@@ -241,38 +241,53 @@ def chunk_document(pages: list, file_name: str, chunk_size: int = 500, chunk_ove
 #  4. EMBEDDING SERVICE (Google Gemini)
 # ============================================================
 
+import requests
+
 def generate_embedding(text: str) -> list:
-    """Generate a single embedding vector via Gemini API."""
+    """Generate a single embedding vector via Gemini REST API."""
     if not GEMINI_API_KEY:
         return [0.0] * EMBED_DIM
-    
-    # Optional: we can truncate text if needed, but chunking already handles it
-    result = genai.embed_content(
-        model="models/text-embedding-004",
-        content=text
-    )
-    return result['embedding']
+        
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+    try:
+        resp = requests.post(url, json={
+            "model": "models/text-embedding-004",
+            "content": {"parts": [{"text": text}]}
+        }, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("embedding", {}).get("values", [0.0] * EMBED_DIM)
+    except Exception as e:
+        print(f"[!] Error calling Gemini REST API for embedding: {e}")
+        return [0.0] * EMBED_DIM
 
 
 def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
-    """Generate embeddings for many texts. Gemini API supports batched embeddings."""
+    """Generate embeddings for many texts via Gemini REST API."""
     if not texts or not GEMINI_API_KEY:
         return [[0.0] * EMBED_DIM] * len(texts)
     
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={GEMINI_API_KEY}"
     vectors = []
-    # Process in batches
+    
     for i in range(0, len(texts), batch_size):
         batch_texts = texts[i:i+batch_size]
         try:
-            result = genai.embed_content(
-                model="models/text-embedding-004",
-                content=batch_texts
-            )
-            # result['embedding'] is a list of embeddings if we sent a list of texts
-            batch_vectors = result['embedding']
-            vectors.extend(batch_vectors)
+            reqs = [
+                {
+                    "model": "models/text-embedding-004",
+                    "content": {"parts": [{"text": t}]}
+                }
+                for t in batch_texts
+            ]
+            resp = requests.post(url, json={"requests": reqs}, timeout=15)
+            resp.raise_for_status()
+            
+            data = resp.json()
+            for emb in data.get("embeddings", []):
+                vectors.append(emb.get("values", [0.0] * EMBED_DIM))
+                
         except Exception as e:
-            print(f"[!] Error generating embedding batch: {e}")
+            print(f"[!] Error in batch embedding: {e}")
             vectors.extend([[0.0] * EMBED_DIM] * len(batch_texts))
             
     return vectors
