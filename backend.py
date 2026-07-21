@@ -248,7 +248,7 @@ def generate_embedding(text: str) -> list:
     
     # Optional: we can truncate text if needed, but chunking already handles it
     result = genai.embed_content(
-        model="models/embedding-001",
+        model="models/text-embedding-004",
         content=text
     )
     return result['embedding']
@@ -265,7 +265,7 @@ def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
         batch_texts = texts[i:i+batch_size]
         try:
             result = genai.embed_content(
-                model="models/embedding-001",
+                model="models/text-embedding-004",
                 content=batch_texts
             )
             # result['embedding'] is a list of embeddings if we sent a list of texts
