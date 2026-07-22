@@ -256,11 +256,12 @@ def generate_embedding(text: str) -> list:
         print("[!] WARNING: Cannot generate embedding — GEMINI_API_KEY is not set. RAG search will not work.")
         return [0.0] * EMBED_DIM
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key={GEMINI_API_KEY}"
     try:
         resp = requests.post(url, json={
-            "model": "models/text-embedding-004",
-            "content": {"parts": [{"text": text}]}
+            "model": "models/gemini-embedding-2",
+            "content": {"parts": [{"text": text}]},
+            "outputDimensionality": EMBED_DIM
         }, timeout=15)
         resp.raise_for_status()
         values = resp.json().get("embedding", {}).get("values", [])
@@ -284,7 +285,7 @@ def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
         print("[!] WARNING: Cannot generate batch embeddings — GEMINI_API_KEY is not set.")
         return [[0.0] * EMBED_DIM] * len(texts)
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents?key={GEMINI_API_KEY}"
     vectors = []
     
     for i in range(0, len(texts), batch_size):
@@ -292,8 +293,9 @@ def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
         try:
             reqs = [
                 {
-                    "model": "models/text-embedding-004",
-                    "content": {"parts": [{"text": t}]}
+                    "model": "models/gemini-embedding-2",
+                    "content": {"parts": [{"text": t}]},
+                    "outputDimensionality": EMBED_DIM
                 }
                 for t in batch_texts
             ]
@@ -349,8 +351,9 @@ def _check_embedding_dimension():
         sample = collection.peek(limit=1)
         if sample and sample.get("embeddings") is not None and len(sample["embeddings"]) > 0:
             existing_dim = len(sample["embeddings"][0])
-            if existing_dim != EMBED_DIM:
-                print(f"[!] DIMENSION MISMATCH: ChromaDB has {existing_dim}-dim embeddings, but current model uses {EMBED_DIM}-dim.")
+            is_zero_vector = all(v == 0.0 for v in sample["embeddings"][0][:10])
+            if existing_dim != EMBED_DIM or is_zero_vector:
+                print(f"[!] INVALID VECTORS: ChromaDB has {existing_dim}-dim embeddings, zero vector={is_zero_vector}. Expected {EMBED_DIM}-dim non-zero.")
                 print(f"[!] Clearing old collection and re-indexing with correct embeddings...")
                 chroma_client.delete_collection("loan_documents")
                 collection = chroma_client.create_collection(name="loan_documents", metadata={"hnsw:space": "cosine"})
