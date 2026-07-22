@@ -42,7 +42,89 @@ const App = {
     this.initTheme();
     this.initEMICalculator();
     this.initAuth();
+    this.checkServerWakeup();
     console.log("🏦 AI Loan Advisory Chatbot (Enhanced) initialized");
+  },
+
+  /**
+   * Check if the backend server is awake (Render free-tier cold start handling).
+   * Shows a loading overlay if the server is sleeping and retries until it responds.
+   */
+  async checkServerWakeup() {
+    const overlay = document.getElementById("wakeupOverlay");
+    const statusEl = document.getElementById("wakeupStatus");
+    const progressBar = document.getElementById("wakeupProgressBar");
+
+    if (!overlay) return; // No overlay in DOM, skip
+
+    let attempt = 0;
+    const maxAttempts = 25; // ~75 seconds max wait
+    const retryDelay = 3000;
+
+    const tryPing = async () => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(`${API.BASE_URL}/api/health`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        if (response.ok) {
+          // Server is awake!
+          statusEl.textContent = "Server is ready! ✅";
+          progressBar.style.width = "100%";
+          progressBar.style.background = "var(--success, #22c55e)";
+          setTimeout(() => {
+            overlay.classList.add("fade-out");
+            setTimeout(() => {
+              overlay.style.display = "none";
+            }, 500);
+          }, 600);
+          return true;
+        }
+      } catch (e) {
+        // Server not ready yet
+      }
+      return false;
+    };
+
+    // First try — maybe server is already awake
+    const alreadyAwake = await tryPing();
+    if (alreadyAwake) return;
+
+    // Server is sleeping — show overlay
+    overlay.style.display = "flex";
+    overlay.classList.remove("fade-out");
+
+    const poll = async () => {
+      attempt++;
+      const progress = Math.min((attempt / maxAttempts) * 90, 90);
+      progressBar.style.width = `${progress}%`;
+
+      if (attempt <= 3) {
+        statusEl.textContent = "Waking up the server...";
+      } else if (attempt <= 8) {
+        statusEl.textContent = "Server is starting up — hang tight...";
+      } else if (attempt <= 15) {
+        statusEl.textContent = "Almost there — loading AI models...";
+      } else {
+        statusEl.textContent = "Still connecting — this can take a minute...";
+      }
+
+      const success = await tryPing();
+      if (success) return;
+
+      if (attempt >= maxAttempts) {
+        statusEl.textContent = "⚠️ Server may be unavailable. Please refresh or try later.";
+        progressBar.style.background = "var(--danger, #ef4444)";
+        return;
+      }
+
+      setTimeout(poll, retryDelay);
+    };
+
+    setTimeout(poll, retryDelay);
   },
 
   setupEventListeners() {

@@ -82,7 +82,8 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 LOCAL_ONLY_MODE = os.getenv("LOCAL_ONLY_MODE", "false").strip().lower() == "true"
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5000").split(",") if o.strip()]
+_default_origins = "http://localhost:5000,http://127.0.0.1:5000,https://ai-loan-advisory-chatbot-sipo.onrender.com"
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()]
 FLASK_DEBUG = os.getenv("FLASK_DEBUG", "false").strip().lower() == "true"
 
 # --- Google Gemini Setup (LLM & Embeddings) ---
@@ -244,8 +245,15 @@ def chunk_document(pages: list, file_name: str, chunk_size: int = 500, chunk_ove
 import requests
 
 def generate_embedding(text: str) -> list:
-    """Generate a single embedding vector via Gemini REST API."""
+    """Generate a single embedding vector via Gemini REST API.
+    
+    NOTE: Embeddings ALWAYS use the Gemini API regardless of LOCAL_ONLY_MODE.
+    LOCAL_ONLY_MODE only controls whether the Gemini *chat* model is used for
+    answer generation. Without real embeddings, the entire RAG pipeline fails
+    (zero vectors → zero cosine similarity → everything is 'out of scope').
+    """
     if not GEMINI_API_KEY:
+        print("[!] WARNING: Cannot generate embedding — GEMINI_API_KEY is not set. RAG search will not work.")
         return [0.0] * EMBED_DIM
         
     url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
@@ -253,17 +261,27 @@ def generate_embedding(text: str) -> list:
         resp = requests.post(url, json={
             "model": "models/text-embedding-004",
             "content": {"parts": [{"text": text}]}
-        }, timeout=10)
+        }, timeout=15)
         resp.raise_for_status()
-        return resp.json().get("embedding", {}).get("values", [0.0] * EMBED_DIM)
+        values = resp.json().get("embedding", {}).get("values", [])
+        if not values or all(v == 0.0 for v in values):
+            print(f"[!] WARNING: Gemini returned empty/zero embedding for text: {text[:80]}...")
+            return [0.0] * EMBED_DIM
+        return values
     except Exception as e:
         print(f"[!] Error calling Gemini REST API for embedding: {e}")
         return [0.0] * EMBED_DIM
 
 
 def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
-    """Generate embeddings for many texts via Gemini REST API."""
-    if not texts or not GEMINI_API_KEY:
+    """Generate embeddings for many texts via Gemini REST API.
+    
+    Always uses Gemini API (not affected by LOCAL_ONLY_MODE).
+    """
+    if not texts:
+        return []
+    if not GEMINI_API_KEY:
+        print("[!] WARNING: Cannot generate batch embeddings — GEMINI_API_KEY is not set.")
         return [[0.0] * EMBED_DIM] * len(texts)
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={GEMINI_API_KEY}"
@@ -279,7 +297,7 @@ def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
                 }
                 for t in batch_texts
             ]
-            resp = requests.post(url, json={"requests": reqs}, timeout=15)
+            resp = requests.post(url, json={"requests": reqs}, timeout=30)
             resp.raise_for_status()
             
             data = resp.json()
@@ -287,7 +305,7 @@ def generate_embeddings_batch(texts: list, batch_size: int = 32) -> list:
                 vectors.append(emb.get("values", [0.0] * EMBED_DIM))
                 
         except Exception as e:
-            print(f"[!] Error in batch embedding: {e}")
+            print(f"[!] Error in batch embedding (batch {i//batch_size + 1}): {e}")
             vectors.extend([[0.0] * EMBED_DIM] * len(batch_texts))
             
     return vectors
@@ -471,16 +489,21 @@ def clear_store():
 DOMAIN_DESCRIPTION = (
     "Loan policy, eligibility criteria, interest rates, EMI calculation, "
     "processing fees, prepayment and foreclosure charges, required KYC "
-    "documents such as PAN and Aadhaar, income and salary requirements, "
+    "documents such as PAN card and Aadhaar card, income and salary requirements, "
     "CIBIL credit score, loan tenure, principal and repayment schedule, "
     "bank lending rules, mortgage and collateral, loan sanction and "
-    "disbursement process for home loans, personal loans, and business loans."
+    "disbursement process for home loans, personal loans, business loans, "
+    "education loans, auto loans, vehicle finance, gold loans, loan against property, "
+    "balance transfer, top-up loans, credit card, banking terms and conditions, "
+    "MITC (Most Important Terms and Conditions), NPA, overdue, late payment, "
+    "loan application process, documentation requirements, guarantor, co-applicant, "
+    "fixed rate, floating rate, reducing balance, flat rate, amortization schedule."
 )
 DOMAIN_ANCHOR_EMBEDDING = generate_embedding(DOMAIN_DESCRIPTION)
 
 # Similarity below this to the domain anchor is treated as likely off-topic.
-# Lowered for Gemini embeddings (they have a wider angular spread)
-DOMAIN_SIMILARITY_THRESHOLD = 0.10
+# Lowered to 0.05 for Gemini embeddings (they have a wider angular spread)
+DOMAIN_SIMILARITY_THRESHOLD = 0.05
 
 
 def is_out_of_domain(question: str, query_embedding: list, top_retrieval_score: float) -> bool:
@@ -489,10 +512,22 @@ def is_out_of_domain(question: str, query_embedding: list, top_retrieval_score: 
     BOTH of the following hold:
       - it is not semantically close to the loan/banking domain description, AND
       - it did not retrieve any strongly relevant chunk from the loaded documents.
-    Requiring both avoids wrongly rejecting valid questions that use unusual
-    phrasing but still hit relevant document content.
+    
+    BYPASS: If the retrieval score is strong (>= 0.30), the question is always
+    considered in-domain regardless of the anchor similarity. This prevents
+    false rejections when documents contain relevant content.
     """
+    # Strong retrieval hit → always in domain (bypass the gate)
+    if top_retrieval_score >= 0.30:
+        return False
+    
+    # Check if embedding is a zero vector (API key missing/broken)
+    if all(v == 0.0 for v in query_embedding[:10]):
+        print("  [!] WARNING: Query embedding is a zero vector — domain gate bypassed (embeddings broken)")
+        return False  # Don't block if embeddings are broken; let the user see whatever we retrieved
+    
     anchor_sim = cosine_similarity(query_embedding, DOMAIN_ANCHOR_EMBEDDING)
+    print(f"  [*] Domain similarity: {anchor_sim:.4f} (threshold: {DOMAIN_SIMILARITY_THRESHOLD}), top retrieval: {top_retrieval_score:.4f}")
     return anchor_sim < DOMAIN_SIMILARITY_THRESHOLD and top_retrieval_score < 0.10
 
 
@@ -612,7 +647,9 @@ def handle_casual_query(question: str) -> dict or None:
     greetings = {"hi", "hello", "hey", "greetings", "yo", "hola", "sup", "howdy",
                  "morning", "afternoon", "evening", "hii", "hiii"}
     if q_clean in greetings or (len(words) <= 3 and any(w in greetings for w in words)):
-        doc_names = list(set(c["metadata"]["fileName"] for c in vector_store["documents"])) if vector_store["documents"] else []
+        # Use ChromaDB stats instead of deleted vector_store variable
+        stats = get_store_stats()
+        doc_names = stats.get("documents", [])
         docs_str = ", ".join(doc_names) if doc_names else "No documents uploaded yet"
         answer = (
             "👋 **Hello! Welcome to your AI Loan Advisory Agent.**\n\n"

@@ -12,6 +12,26 @@
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
+  <!-- Server Wake-Up Loading Overlay -->
+  <div class="wakeup-overlay" id="wakeupOverlay">
+    <div class="wakeup-content">
+      <div class="wakeup-logo-ring">
+        <div class="wakeup-spinner"></div>
+        <div class="wakeup-logo-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+      </div>
+      <h2 class="wakeup-title">LMS Loan Advisory Agent</h2>
+      <p class="wakeup-subtitle" id="wakeupStatus">Connecting to server...</p>
+      <div class="wakeup-progress-track">
+        <div class="wakeup-progress-bar" id="wakeupProgressBar"></div>
+      </div>
+      <span class="wakeup-hint">Free-tier server may take 30–60 seconds to wake up</span>
+    </div>
+  </div>
+
   <div class="app" id="app">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
@@ -39,7 +59,7 @@
           Documents
         </h3>
         <div class="upload-zone" id="uploadZone">
-          <input type="file" id="fileInput" accept=".pdf" hidden />
+          <input type="file" id="fileInput" accept=".pdf,.docx,.xlsx,.html" hidden />
           <div class="upload-content" id="uploadContent">
             <div class="upload-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -47,8 +67,8 @@
                 <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
             </div>
-            <p>Drop PDF here or <span class="upload-link">browse</span></p>
-            <span class="upload-hint">Max 20MB &bull; PDF only</span>
+            <p>Drop file here or <span class="upload-link">browse</span></p>
+            <span class="upload-hint">Max 20MB &bull; PDF, DOCX, XLSX, HTML</span>
           </div>
           <div class="upload-progress hidden" id="uploadProgress">
             <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>

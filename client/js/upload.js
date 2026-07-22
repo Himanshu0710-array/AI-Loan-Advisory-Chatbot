@@ -50,8 +50,10 @@ const Upload = {
 
       const file = e.dataTransfer.files[0];
       if (file) {
-        if (file.type !== "application/pdf") {
-          Toast.show("Only PDF files are allowed.", "error");
+        const ext = file.name.split('.').pop().toLowerCase();
+        const allowedExts = ["pdf", "docx", "xlsx", "html"];
+        if (!allowedExts.includes(ext)) {
+          Toast.show("Only PDF, DOCX, XLSX, and HTML files are allowed.", "error");
           return;
         }
         this.handleUpload(file);
