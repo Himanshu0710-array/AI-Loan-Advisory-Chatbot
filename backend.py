@@ -347,7 +347,7 @@ def _check_embedding_dimension():
         
         # Peek at one embedding to check its dimension
         sample = collection.peek(limit=1)
-        if sample and sample.get("embeddings") and len(sample["embeddings"]) > 0:
+        if sample and sample.get("embeddings") is not None and len(sample["embeddings"]) > 0:
             existing_dim = len(sample["embeddings"][0])
             if existing_dim != EMBED_DIM:
                 print(f"[!] DIMENSION MISMATCH: ChromaDB has {existing_dim}-dim embeddings, but current model uses {EMBED_DIM}-dim.")
@@ -1307,11 +1307,22 @@ def upload_document():
 @app.route("/api/documents", methods=["GET"])
 def list_documents():
     documents = []
+    found_names = set()
+    
+    # 1. Add files currently on disk
     if DOCUMENTS_DIR.exists():
         for f in DOCUMENTS_DIR.iterdir():
             if f.suffix.lower() in [".pdf", ".docx", ".xlsx", ".html"]:
                 documents.append({"name": f.name, "size": f.stat().st_size})
-    return jsonify({"success": True, "documents": documents, "stats": get_store_stats()})
+                found_names.add(f.name)
+                
+    # 2. Add files that exist in ChromaDB but were wiped from disk (Render ephemeral storage)
+    stats = get_store_stats()
+    for doc_name in stats.get("documents", []):
+        if doc_name not in found_names:
+            documents.append({"name": doc_name, "size": 0})  # 0 indicates stored in DB only
+            
+    return jsonify({"success": True, "documents": documents, "stats": stats})
 
 
 # --- Clear Documents (admin-protected) ---
