@@ -1485,6 +1485,10 @@ def health():
 #  10. START THE SERVER
 # ============================================================
 
+# Initialize stores unconditionally so they run in Gunicorn
+init_vector_store()
+init_feedback_store()
+
 if __name__ == "__main__":
     print()
     print("=" * 55)
@@ -1503,8 +1507,5 @@ if __name__ == "__main__":
     print("  Press Ctrl+C to stop")
     print("=" * 55)
     print()
-
-    init_vector_store()
-    init_feedback_store()
 
     app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG, use_reloader=FLASK_DEBUG)
