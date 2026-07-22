@@ -330,8 +330,42 @@ CHROMA_DIR = DATA_DIR / "chroma"
 chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 collection = chroma_client.get_or_create_collection(name="loan_documents", metadata={"hnsw:space": "cosine"})
 
+def _check_embedding_dimension():
+    """Check if existing ChromaDB embeddings match the expected EMBED_DIM (768).
+    
+    If the collection was created with a different embedding model (e.g., 384-dim
+    sentence-transformers), the dimensions won't match and all queries will fail with:
+    'Collection expecting embedding with dimension of 384, got 768'
+    
+    In that case, we clear the collection so documents get re-indexed with the correct model.
+    """
+    global collection
+    try:
+        count = collection.count()
+        if count == 0:
+            return  # Empty collection, nothing to check
+        
+        # Peek at one embedding to check its dimension
+        sample = collection.peek(limit=1)
+        if sample and sample.get("embeddings") and len(sample["embeddings"]) > 0:
+            existing_dim = len(sample["embeddings"][0])
+            if existing_dim != EMBED_DIM:
+                print(f"[!] DIMENSION MISMATCH: ChromaDB has {existing_dim}-dim embeddings, but current model uses {EMBED_DIM}-dim.")
+                print(f"[!] Clearing old collection and re-indexing with correct embeddings...")
+                chroma_client.delete_collection("loan_documents")
+                collection = chroma_client.create_collection(name="loan_documents", metadata={"hnsw:space": "cosine"})
+                print(f"[+] Collection cleared. Documents will be re-indexed on startup.")
+            else:
+                print(f"[+] Embedding dimension check passed: {existing_dim}-dim ✓")
+    except Exception as e:
+        print(f"[!] Could not verify embedding dimensions: {e}")
+
+
 def init_vector_store():
-    """Auto-load any PDFs found if ChromaDB is empty."""
+    """Auto-load any PDFs found if ChromaDB is empty or was just cleared due to dimension mismatch."""
+    # First, check for embedding dimension mismatch (e.g., old 384-dim vs new 768-dim)
+    _check_embedding_dimension()
+    
     stats = get_store_stats()
     print(f"[*] Loaded ChromaDB vector store: {stats['totalChunks']} chunks")
 
