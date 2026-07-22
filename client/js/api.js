@@ -37,18 +37,20 @@ const API = {
    * Stream a chat response via SSE (Server-Sent Events).
    */
   async streamMessage(question, onChunk, onDone, onError) {
-    try {
+    const doStream = async (headers) => {
       const response = await fetch(`${this.BASE_URL}/api/chat/stream`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          ...this.getAuthHeaders()
+          ...headers
         },
         body: JSON.stringify({ question }),
       });
 
       if (!response.ok) {
-        if (response.status === 401) throw new Error("Unauthorized");
+        if (response.status === 401) {
+          return "RETRY_NO_AUTH";
+        }
         const error = await response.json().catch(() => ({}));
         throw new Error(error.error || "Stream failed");
       }
@@ -79,6 +81,21 @@ const API = {
             }
           }
         }
+      }
+      return "OK";
+    };
+
+    try {
+      // Try with auth headers first
+      const result = await doStream(this.getAuthHeaders());
+      
+      if (result === "RETRY_NO_AUTH") {
+        // Token expired/invalid — clear it and retry without auth
+        console.warn("[Auth] Token expired or invalid. Clearing token and retrying...");
+        this.logout();
+        // Update UI to reflect logged-out state
+        if (typeof App !== "undefined" && App.updateAuthUI) App.updateAuthUI();
+        await doStream({});
       }
     } catch (error) {
       if (onError) onError(error);

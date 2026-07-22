@@ -58,7 +58,7 @@ import sys
 import math
 from pathlib import Path
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -915,6 +915,7 @@ CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + str(DATA_DIR / 'app.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "dev-super-secret-key")
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)  # Default is 15 min — way too short
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
